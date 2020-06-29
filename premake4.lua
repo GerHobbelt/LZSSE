@@ -5,8 +5,8 @@ solution "lzsse"
 	flags          { "NoPCH" }
 	location       ( _ACTION )
 	configuration { "gmake" }
-		buildoptions   { "-std=c++11", "-msse4.1" }
-	
+		buildoptions   { "-std=c++11" }
+
 	project "lzsse"
 		language "C++"
 		kind "ConsoleApp"
@@ -14,7 +14,7 @@ solution "lzsse"
 
 		configuration "Debug*"
 			flags { "Symbols" }
-			
+
 		configuration "Release*"
 			flags { "OptimizeSpeed" }
 
@@ -23,4 +23,3 @@ solution "lzsse"
 
 		configuration { "x64", "Release" }
 			targetdir "bin/64/release"
-		
