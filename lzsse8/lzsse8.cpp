@@ -27,6 +27,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #include "lzsse8_platform.h"
 #include "lzsse8.h"
@@ -497,7 +498,11 @@ size_t LZSSE8_CompressOptimalParse( LZSSE8_OptimalParseState* state, const void*
             {
                 const uint8_t* currentInput = input + currentPosition + where;
 
+#ifdef NO_XOR_ENCODING
+                outputCursor[ where ] = *currentInput;
+#else
                 outputCursor[ where ] = *currentInput ^ *( currentInput - previousOffset );
+#endif
             }
 
             outputCursor += pathDistance;
@@ -519,7 +524,11 @@ size_t LZSSE8_CompressOptimalParse( LZSSE8_OptimalParseState* state, const void*
             }
 
             // Write the offset out - note the xor with the previous offset.
+#ifdef NO_XOR_ENCODING
+            *reinterpret_cast< uint16_t* >( outputCursor ) = nextPathNode->offset;
+#else
             *reinterpret_cast< uint16_t* >( outputCursor ) = nextPathNode->offset ^ previousOffset;
+#endif
 
             previousOffset = nextPathNode->offset;
             outputCursor  += sizeof( uint16_t );
@@ -758,7 +767,11 @@ size_t LZSSE8_CompressFast( LZSSE8_FastParseState* state, const void* inputChar,
                 {
                     const uint8_t* currentInput = inputCursor - ( literalsToFlush - where );
 
+#ifdef NO_XOR_ENCODING
+                    *( outputCursor++ ) = *currentInput;
+#else
                     *( outputCursor++ ) = *currentInput ^ *( currentInput - previousOffset );
+#endif
                 }
 
                 ++currentControlCount;
@@ -794,7 +807,11 @@ size_t LZSSE8_CompressFast( LZSSE8_FastParseState* state, const void* inputChar,
             // The match length value we are encoding.
 
             // Write the offset out - note the xor with the previous offset.
+#ifdef NO_XOR_ENCODING
+            *reinterpret_cast< uint16_t* >( outputCursor ) = matchOffset;
+#else
             *reinterpret_cast< uint16_t* >( outputCursor ) = matchOffset ^ previousOffset;
+#endif
 
             previousOffset = matchOffset;
             outputCursor  += sizeof( uint16_t );
@@ -902,9 +919,14 @@ size_t LZSSE8_CompressFast( LZSSE8_FastParseState* state, const void* inputChar,
 
                 ++currentControlCount;
 
+#ifdef NO_XOR_ENCODING
+                *reinterpret_cast< uint64_t* >( outputCursor ) = 
+                    *reinterpret_cast< const uint64_t* >( inputCursor - ( sizeof( uint64_t ) - 1 ) ); 
+#else
                 *reinterpret_cast< uint64_t* >( outputCursor ) = 
                     *reinterpret_cast< const uint64_t* >( inputCursor - ( sizeof( uint64_t ) - 1 ) ) ^ 
                     *reinterpret_cast< const uint64_t* >( ( inputCursor - ( sizeof( uint64_t ) - 1 ) ) - previousOffset );
+#endif
 
                 outputCursor += sizeof( uint64_t );
 
@@ -959,7 +981,11 @@ size_t LZSSE8_CompressFast( LZSSE8_FastParseState* state, const void* inputChar,
             {
                 const uint8_t* currentInput = inputCursor - ( literalsToFlush - where );
 
+#ifdef NO_XOR_ENCODING
+                *( outputCursor++ ) = *currentInput;
+#else
                 *( outputCursor++ ) = *currentInput ^ *( currentInput - previousOffset );
+#endif
             }
 
             ++currentControlCount;
@@ -1040,13 +1066,27 @@ size_t LZSSE8_Decompress( const void* inputChar, size_t inputLength, void* outpu
     //    - bytesOut controls how much we advance the output cursor.
     //    - We use 8 bit shifts to advance all the controls up to the next byte. There is some variable sized register trickery that 
     //      x86/x64 is great for as long as we don't anger the register renamer.
+ 
+#ifdef NO_XOR_ENCODING
+
+#define COMPUTE_OFFSET(HILO) size_t offset_ = static_cast<size_t>( static_cast<ptrdiff_t>( static_cast<int8_t>( readOffsetHalf##HILO ) ) ) & inputWord; \
+    offset = offset_ ? offset_ : offset
+#define GET_STORE(matchData, literals, fromLiteral) _mm_blendv_epi8(matchData, literals, fromLiteral)
+
+#else
+
+#define COMPUTE_OFFSET(HILO) offset ^= static_cast<size_t>( static_cast<ptrdiff_t>( static_cast<int8_t>( readOffsetHalf##HILO ) ) ) & inputWord
+#define GET_STORE(matchData, literals, fromLiteral) _mm_xor_si128( matchData, literals )
+
+#endif
+
 
 #define DECODE_STEP( HILO, CHECKMATCH, CHECKBUFFERS )                                                                           \
     {                                                                                                                           \
         size_t  inputWord = *reinterpret_cast<const uint16_t*>( inputCursor );                                                  \
         __m128i literals  = _mm_loadu_si128( reinterpret_cast<const __m128i*>( inputCursor ) );                                 \
                                                                                                                                 \
-        offset ^= static_cast<size_t>( static_cast<ptrdiff_t>( static_cast<int8_t>( readOffsetHalf##HILO ) ) ) & inputWord;     \
+        COMPUTE_OFFSET(HILO);                                                                                                   \
                                                                                                                                 \
         readOffsetHalf##HILO >>= 8;                                                                                             \
                                                                                                                                 \
@@ -1062,7 +1102,7 @@ size_t LZSSE8_Decompress( const void* inputChar, size_t inputLength, void* outpu
                                                                                                                                 \
         fromLiteral##HILO   = _mm_srli_si128( fromLiteral##HILO, 1 );                                                           \
                                                                                                                                 \
-        __m128i toStore     = _mm_xor_si128( matchData, literals );                                                             \
+        __m128i toStore     = GET_STORE( matchData, literals, fromLiteral );                                                    \
                                                                                                                                 \
         _mm_storeu_si128( reinterpret_cast<__m128i*>( outputCursor ), toStore );                                                \
                                                                                                                                 \
@@ -1081,7 +1121,7 @@ size_t LZSSE8_Decompress( const void* inputChar, size_t inputLength, void* outpu
         size_t  inputWord = *reinterpret_cast<const uint16_t*>( inputCursor );                                                  \
         __m128i literals = _mm_loadu_si128( reinterpret_cast<const __m128i*>( inputCursor ) );                                  \
                                                                                                                                 \
-        offset ^= static_cast<size_t>( static_cast<ptrdiff_t>( static_cast<int8_t>( readOffsetHalf##HILO ) ) ) & inputWord;     \
+        COMPUTE_OFFSET(HILO);                                                                                                   \
                                                                                                                                 \
         const uint8_t* matchPointer = reinterpret_cast<const uint8_t*>( outputCursor - offset );                                \
                                                                                                                                 \
@@ -1095,7 +1135,7 @@ size_t LZSSE8_Decompress( const void* inputChar, size_t inputLength, void* outpu
                                                                                                                                 \
         fromLiteral##HILO   = _mm_srli_si128( fromLiteral##HILO, 1 );                                                           \
                                                                                                                                 \
-        __m128i toStore     = _mm_xor_si128( matchData, literals );                                                             \
+        __m128i toStore     = GET_STORE( matchData, literals, fromLiteral );                                                    \
                                                                                                                                 \
         _mm_storeu_si128( reinterpret_cast<__m128i*>( outputCursor ), toStore );                                                \
                                                                                                                                 \
@@ -1111,7 +1151,7 @@ size_t LZSSE8_Decompress( const void* inputChar, size_t inputLength, void* outpu
         size_t  inputWord = *reinterpret_cast<const uint16_t*>( inputCursor );                                                  \
         __m128i literals = _mm_loadu_si128( reinterpret_cast<const __m128i*>( inputCursor ) );                                  \
                                                                                                                                 \
-        offset ^= static_cast<size_t>( static_cast<ptrdiff_t>( static_cast<int8_t>( readOffsetHalf##HILO ) ) ) & inputWord;     \
+        COMPUTE_OFFSET(HILO);                                                                                                   \
                                                                                                                                 \
         const uint8_t* matchPointer = reinterpret_cast<const uint8_t*>( outputCursor - offset );                                \
                                                                                                                                 \
@@ -1123,7 +1163,7 @@ size_t LZSSE8_Decompress( const void* inputChar, size_t inputLength, void* outpu
                                                                                                                                 \
         literals = _mm_and_si128( literals, fromLiteral );                                                                      \
                                                                                                                                 \
-        __m128i toStore     = _mm_xor_si128( matchData, literals );                                                             \
+        __m128i toStore     = GET_STORE( matchData, literals, fromLiteral );                                                    \
                                                                                                                                 \
         _mm_storeu_si128( reinterpret_cast<__m128i*>( outputCursor ), toStore );                                                \
                                                                                                                                 \

@@ -21,8 +21,8 @@ void DisplayUsage()
     printf( "    -2    Compress in lzsse2 mode (default)\n" );
     printf( "    -4    Compress in lzsse4 mode\n" );
     printf( "    -8    Compress in lzsse8 mode\n" );
-    printf( "    -f    Optimal parse (default)\n" );
-    printf( "    -o    Fast parse (not available for lzsse2)\n" );
+    printf( "    -o    Optimal parse (default)\n" );
+    printf( "    -f    Fast parse (not available for lzsse2)\n" );
     printf( "    -d    Decompress\n" );
     printf( "    -lN   Compression level for optimal parse, where N is 1 to 17 (default 16)\n" );
     printf( "    -bN   Block size in KiB, default 131,072\n" );
@@ -67,8 +67,12 @@ void Compress( FILE* inputFile, FILE* outputFile, uint64_t blockSize, uint8_t mo
     }
 
     size_t   typedBlockSize = static_cast< size_t >( blockSize );
-    uint8_t* inputBuffer    = reinterpret_cast< uint8_t* >( malloc( typedBlockSize ) );
-    uint8_t* outputBuffer   = reinterpret_cast< uint8_t* >( malloc( typedBlockSize ) );
+
+    // Because compressor uses 16-byte SSE writes under certain conditions it may write
+    // beyond the memory block effectively corrupting it. Increasing allocations by 16-bytes
+    // as a workaround.
+    uint8_t* inputBuffer    = reinterpret_cast< uint8_t* >( malloc( typedBlockSize + 16 ) );
+    uint8_t* outputBuffer   = reinterpret_cast< uint8_t* >( malloc( typedBlockSize + 16 ) );
 
     if ( inputBuffer == nullptr || outputBuffer == nullptr )
     {
